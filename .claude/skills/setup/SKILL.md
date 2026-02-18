@@ -1,13 +1,13 @@
 ---
 name: setup
-description: Run initial NanoClaw setup. Use when user wants to install dependencies, authenticate WhatsApp, register their main channel, or start the background services. Triggers on "setup", "install", "configure nanoclaw", or first-time setup requests.
+description: Run initial NanoClaw setup. Use when user wants to install dependencies, authenticate Slack, register their main channel, or start the background services. Triggers on "setup", "install", "configure nanoclaw", or first-time setup requests.
 ---
 
 # NanoClaw Setup
 
-Run setup scripts automatically. Only pause when user action is required (WhatsApp authentication, configuration choices). Scripts live in `.claude/skills/setup/scripts/` and emit structured status blocks to stdout. Verbose logs go to `logs/setup.log`.
+Run setup scripts automatically. Only pause when user action is required (Slack token configuration, configuration choices). Scripts live in `.claude/skills/setup/scripts/` and emit structured status blocks to stdout. Verbose logs go to `logs/setup.log`.
 
-**Principle:** When something is broken or missing, fix it. Don't tell the user to go fix it themselves unless it genuinely requires their manual action (e.g. scanning a QR code, pasting a secret token). If a dependency is missing, install it. If a service won't start, diagnose and repair. Ask the user for permission when needed, then do the work.
+**Principle:** When something is broken or missing, fix it. Don't tell the user to go fix it themselves unless it genuinely requires their manual action (e.g. creating a Slack app, pasting a secret token). If a dependency is missing, install it. If a service won't start, diagnose and repair. Ask the user for permission when needed, then do the work.
 
 **UX Note:** Use `AskUserQuestion` for all user-facing questions.
 
@@ -15,7 +15,7 @@ Run setup scripts automatically. Only pause when user action is required (WhatsA
 
 Run `./.claude/skills/setup/scripts/01-check-environment.sh` and parse the status block.
 
-- If HAS_AUTH=true → note that WhatsApp auth exists, offer to skip step 5
+- If HAS_AUTH=true → note that Slack tokens exist, offer to skip step 5
 - If HAS_REGISTERED_GROUPS=true → note existing config, offer to skip or reconfigure
 - Record PLATFORM, APPLE_CONTAINER, and DOCKER values for step 3
 
@@ -98,66 +98,64 @@ Do NOT ask the user to paste the token into the chat. Do NOT use AskUserQuestion
 
 **API key:** Tell the user to add `ANTHROPIC_API_KEY=<key>` to the `.env` file in the project root, then let you know when done. Once confirmed, verify the `.env` file has the key.
 
-## 5. WhatsApp Authentication
+## 5. Slack Authentication
 
-If HAS_AUTH=true from step 1, confirm with user: "WhatsApp credentials already exist. Want to keep them or re-authenticate?" If keeping, skip to step 6.
+If HAS_AUTH=true from step 1, confirm with user: "Slack tokens already exist. Want to keep them or reconfigure?" If keeping, skip to step 6.
 
-AskUserQuestion: QR code in browser (recommended) vs pairing code vs QR code in terminal?
+Tell the user to create a Slack App at https://api.slack.com/apps:
 
-- **QR browser:** Run `./.claude/skills/setup/scripts/04-auth-whatsapp.sh --method qr-browser` (Bash timeout: 150000ms)
-- **Pairing code:** Ask for phone number first (country code, no + or spaces, e.g. 14155551234). Run `./.claude/skills/setup/scripts/04-auth-whatsapp.sh --method pairing-code --phone NUMBER` (Bash timeout: 150000ms). Display the PAIRING_CODE from the status block with instructions.
-- **QR terminal:** Run `./.claude/skills/setup/scripts/04-auth-whatsapp.sh --method qr-terminal`. Tell user to run `cd PROJECT_PATH && npm run auth` in another terminal. Wait for confirmation.
+1. Click "Create New App" → "From scratch"
+2. Name the app (e.g. "NanoClaw") and select the workspace
+3. Go to **OAuth & Permissions** → Add these Bot Token Scopes:
+   - `app_mentions:read`, `chat:write`, `channels:read`, `channels:history`
+   - `groups:read`, `groups:history`, `im:read`, `im:history`, `im:write`, `users:read`
+4. Go to **Event Subscriptions** → Enable Events → Subscribe to bot events:
+   - `app_mention`, `message.im`
+5. Go to **Socket Mode** → Enable Socket Mode → Generate an App-Level Token with `connections:write` scope
+   - Copy the token (starts with `xapp-`)
+6. Go to **Install App** → Install to Workspace → Copy the Bot User OAuth Token (starts with `xoxb-`)
+7. Add both tokens to `.env`:
+   - `SLACK_BOT_TOKEN=xoxb-...`
+   - `SLACK_APP_TOKEN=xapp-...`
 
-If AUTH_STATUS=already_authenticated → skip ahead.
+Wait for the user to confirm they've added the tokens to `.env`.
 
-**If failed:**
-- qr_timeout → QR expired. Automatically re-run the auth script to generate a fresh QR. Tell user a new QR is ready.
-- logged_out → Delete `store/auth/` and re-run auth automatically.
-- 515 → Stream error during pairing. The auth script handles reconnection, but if it persists, re-run the auth script.
-- timeout → Auth took too long. Ask user if they scanned/entered the code, offer to retry.
+Run `./.claude/skills/setup/scripts/04-auth-slack.sh` and parse the status block.
 
-## 6. Configure Trigger and Channel Type
+**If AUTH_STATUS=authenticated:** Display the bot user ID and team name. Continue.
 
-First, determine the phone number situation. Get the bot's WhatsApp number from `store/auth/creds.json`:
-`node -e "const c=require('./store/auth/creds.json');console.log(c.me.id.split(':')[0].split('@')[0])"`
+**If AUTH_STATUS=missing_tokens:** Tokens not found in `.env`. Walk the user through adding them.
 
-AskUserQuestion: Does the bot share your personal WhatsApp number, or does it have its own dedicated phone number?
+**If AUTH_STATUS=failed:** Token is invalid. Ask the user to verify they copied the correct token. Common issues:
+- Wrong token type (user token vs bot token)
+- Token not yet installed to workspace
+- App permissions not saved before installing
 
-AskUserQuestion: What trigger word? (default: Andy). In group chats, messages starting with @TriggerWord go to Claude. In the main channel, no prefix needed.
+## 6. Configure Trigger and Channel
 
-AskUserQuestion: Main channel type? (options depend on phone number setup)
+AskUserQuestion: What trigger word? (default: Andy). In channels, the bot responds when @mentioned. The trigger word is used as the bot's display name in conversations.
 
-**If bot shares user's number (same phone):**
-1. Self-chat (chat with yourself) — Recommended. You message yourself and the bot responds.
-2. Solo group (just you) — A group where you're the only member. Good if you want message history separate from self-chat.
+AskUserQuestion: Main channel type?
+1. Slack channel — Recommended. @mention the bot in a channel to interact.
+2. DM with the bot — Message the bot directly. No @mention needed.
 
-**If bot has its own dedicated phone number:**
-1. DM with the bot — Recommended. You message the bot's number directly.
-2. Solo group with the bot — A group with just you and the bot, no one else.
+## 7. Sync and Select Channel
 
-Do NOT show options that don't apply to the user's setup. For example, don't offer "DM with the bot" if the bot shares the user's number (you can't DM yourself on WhatsApp).
+1. Run `./.claude/skills/setup/scripts/05-sync-channels.sh` (Bash timeout: 60000ms)
+2. **If CHANNELS_IN_DB=0:** Check `logs/setup.log`. Common causes: bot not installed to workspace (re-run step 5), insufficient permissions.
+3. Query the database for channels: `sqlite3 store/messages.db "SELECT jid, name FROM chats WHERE jid LIKE 'C%' OR jid LIKE 'G%' ORDER BY name"`. Do NOT display the raw output to the user.
+4. Present the most likely candidates as AskUserQuestion options — show names only, not channel IDs. Include channels where the bot has been invited. If using DM, get the DM channel ID from the sync results.
 
-## 7. Sync and Select Group (If Group Channel)
-
-**For personal chat:** The JID is the bot's own phone number from step 6. Construct as `NUMBER@s.whatsapp.net`.
-
-**For DM with bot's dedicated number:** Ask for the bot's phone number, construct JID as `NUMBER@s.whatsapp.net`.
-
-**For group (solo or with bot):**
-1. Run `./.claude/skills/setup/scripts/05-sync-groups.sh` (Bash timeout: 60000ms)
-2. **If BUILD=failed:** Read `logs/setup.log`, fix the TypeScript error, re-run.
-3. **If GROUPS_IN_DB=0:** Check `logs/setup.log` for the sync output. Common causes: WhatsApp auth expired (re-run step 5), connection timeout (re-run sync script with longer timeout).
-4. Run `./.claude/skills/setup/scripts/05b-list-groups.sh` to get groups (pipe-separated JID|name lines). Do NOT display the output to the user.
-5. Pick the most likely candidates (e.g. groups with the trigger word or "NanoClaw" in the name, small/solo groups) and present them as AskUserQuestion options — show names only, not JIDs. Include an "Other" option if their group isn't listed. If they pick Other, search by name in the DB or re-run with a higher limit.
+**Important:** The bot must be invited to the channel first. Tell the user to invite the bot with `/invite @BotName` in the desired channel before selecting it.
 
 ## 8. Register Channel
 
 Run `./.claude/skills/setup/scripts/06-register-channel.sh` with args:
-- `--jid "JID"` — from step 7
+- `--jid "CHANNEL_ID"` — from step 7 (e.g. `C012345ABCD`)
 - `--name "main"` — always "main" for the first channel
 - `--trigger "@TriggerWord"` — from step 6
 - `--folder "main"` — always "main" for the first channel
-- `--no-trigger-required` — if personal chat, DM, or solo group
+- `--no-trigger-required` — if DM channel
 - `--assistant-name "Name"` — if trigger word differs from "Andy"
 
 ## 9. Mount Allowlist
@@ -174,14 +172,13 @@ Tell user how to grant a group access: add `containerConfig.additionalMounts` to
 
 ## 10. Start Service
 
-If the service is already running (check `launchctl list | grep nanoclaw` on macOS), unload it first: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist` — then proceed with a clean install.
+If the service is already running (check `systemctl --user is-active nanoclaw` on Linux or `launchctl list | grep nanoclaw` on macOS), stop it first — then proceed with a clean install.
 
 Run `./.claude/skills/setup/scripts/08-setup-service.sh` and parse the status block.
 
 **If SERVICE_LOADED=false:**
 - Read `logs/setup.log` for the error.
-- Common fix: plist already loaded with different path. Unload the old one first, then re-run.
-- On macOS: check `launchctl list | grep nanoclaw` to see if it's loaded with an error status. If the PID column is `-` and the status column is non-zero, the service is crashing. Read `logs/nanoclaw.error.log` for the crash reason and fix it (common: wrong Node path, missing .env, missing auth).
+- On macOS: check `launchctl list | grep nanoclaw` to see if it's loaded with an error status. If the PID column is `-` and the status column is non-zero, the service is crashing. Read `logs/nanoclaw.error.log` for the crash reason and fix it (common: wrong Node path, missing .env, missing Slack tokens).
 - On Linux: check `systemctl --user status nanoclaw` for the error and fix accordingly.
 - Re-run the setup-service script after fixing.
 
@@ -193,26 +190,24 @@ Run `./.claude/skills/setup/scripts/09-verify.sh` and parse the status block.
 - SERVICE=stopped → run `npm run build` first, then restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux). Re-check.
 - SERVICE=not_found → re-run step 10.
 - CREDENTIALS=missing → re-run step 4.
-- WHATSAPP_AUTH=not_found → re-run step 5.
+- SLACK_AUTH=not_found → re-run step 5.
 - REGISTERED_GROUPS=0 → re-run steps 7-8.
 - MOUNT_ALLOWLIST=missing → run `./.claude/skills/setup/scripts/07-configure-mounts.sh --empty` to create a default.
 
 After fixing, re-run `09-verify.sh` to confirm everything passes.
 
-Tell user to test: send a message in their registered chat (with or without trigger depending on channel type).
+Tell user to test: @mention the bot in the registered Slack channel (or send a DM if using DM mode).
 
 Show the log tail command: `tail -f logs/nanoclaw.log`
 
 ## Troubleshooting
 
-**Service not starting:** Check `logs/nanoclaw.error.log`. Common causes: wrong Node path in plist (re-run step 10), missing `.env` (re-run step 4), missing WhatsApp auth (re-run step 5).
+**Service not starting:** Check `logs/nanoclaw.error.log`. Common causes: wrong Node path in service config (re-run step 10), missing `.env` (re-run step 4), missing Slack tokens (re-run step 5).
 
-**Container agent fails ("Claude Code process exited with code 1"):** Ensure the container runtime is running — start it: `container system start` (Apple Container) or `open -a Docker` (macOS Docker). Check container logs in `groups/main/logs/container-*.log`.
+**Container agent fails ("Claude Code process exited with code 1"):** Ensure Docker is running: `sudo systemctl start docker` (Linux) or `open -a Docker` (macOS). Check container logs in `groups/main/logs/container-*.log`.
 
-**No response to messages:** Verify the trigger pattern matches. Main channel and personal/solo chats don't need a prefix. Check the registered JID in the database: `sqlite3 store/messages.db "SELECT * FROM registered_groups"`. Check `logs/nanoclaw.log`.
+**No response to messages:** Verify the bot is invited to the channel (`/invite @BotName`). Check that event subscriptions (`app_mention`, `message.im`) are configured. Check the registered channel ID in the database: `sqlite3 store/messages.db "SELECT * FROM registered_groups"`. Check `logs/nanoclaw.log`.
 
-**Messages sent but not received (DMs):** WhatsApp may use LID (Linked Identity) JIDs. Check logs for LID translation. Verify the registered JID has no device suffix (should be `number@s.whatsapp.net`, not `number:0@s.whatsapp.net`).
+**Slack connection issues:** Verify Socket Mode is enabled in the Slack app settings. Check that `SLACK_APP_TOKEN` starts with `xapp-` and `SLACK_BOT_TOKEN` starts with `xoxb-`. Re-run `04-auth-slack.sh` to validate tokens.
 
-**WhatsApp disconnected:** Run `npm run auth` to re-authenticate, then `npm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw`.
-
-**Unload service:** `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist`
+**Unload service:** `systemctl --user stop nanoclaw` (Linux) or `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist` (macOS)

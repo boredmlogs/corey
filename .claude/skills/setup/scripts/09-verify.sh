@@ -62,12 +62,14 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
 fi
 log "Credentials: $CREDENTIALS"
 
-# 4. Check WhatsApp auth
-WHATSAPP_AUTH="not_found"
-if [ -d "$PROJECT_ROOT/store/auth" ] && [ "$(ls -A "$PROJECT_ROOT/store/auth" 2>/dev/null)" ]; then
-  WHATSAPP_AUTH="authenticated"
+# 4. Check Slack auth
+SLACK_AUTH="not_found"
+if [ -f "$PROJECT_ROOT/.env" ]; then
+  if grep -qE "^SLACK_BOT_TOKEN=" "$PROJECT_ROOT/.env" 2>/dev/null && grep -qE "^SLACK_APP_TOKEN=" "$PROJECT_ROOT/.env" 2>/dev/null; then
+    SLACK_AUTH="configured"
+  fi
 fi
-log "WhatsApp auth: $WHATSAPP_AUTH"
+log "Slack auth: $SLACK_AUTH"
 
 # 5. Check registered groups (in SQLite — the JSON file gets migrated away on startup)
 REGISTERED_GROUPS=0
@@ -85,7 +87,7 @@ log "Mount allowlist: $MOUNT_ALLOWLIST"
 
 # Determine overall status
 STATUS="success"
-if [ "$SERVICE" != "running" ] || [ "$CREDENTIALS" = "missing" ] || [ "$WHATSAPP_AUTH" = "not_found" ] || [ "$REGISTERED_GROUPS" -eq 0 ] 2>/dev/null; then
+if [ "$SERVICE" != "running" ] || [ "$CREDENTIALS" = "missing" ] || [ "$SLACK_AUTH" = "not_found" ] || [ "$REGISTERED_GROUPS" -eq 0 ] 2>/dev/null; then
   STATUS="failed"
 fi
 
@@ -96,7 +98,7 @@ cat <<EOF
 SERVICE: $SERVICE
 CONTAINER_RUNTIME: $CONTAINER_RUNTIME
 CREDENTIALS: $CREDENTIALS
-WHATSAPP_AUTH: $WHATSAPP_AUTH
+SLACK_AUTH: $SLACK_AUTH
 REGISTERED_GROUPS: $REGISTERED_GROUPS
 MOUNT_ALLOWLIST: $MOUNT_ALLOWLIST
 STATUS: $STATUS

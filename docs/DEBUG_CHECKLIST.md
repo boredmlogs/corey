@@ -27,8 +27,8 @@ container ls -a --format '{{.Names}} {{.Status}}' 2>/dev/null | grep nanoclaw
 # 4. Recent errors in service log?
 grep -E 'ERROR|WARN' logs/nanoclaw.log | tail -20
 
-# 5. Is WhatsApp connected? (look for last connection event)
-grep -E 'Connected to WhatsApp|Connection closed|connection.*close' logs/nanoclaw.log | tail -5
+# 5. Is Slack connected? (look for last connection event)
+grep -E 'Connected to Slack|Socket Mode|connection.*close' logs/nanoclaw.log | tail -5
 
 # 6. Are groups loaded?
 grep 'groupCount' logs/nanoclaw.log | tail -3
@@ -77,7 +77,7 @@ grep -E 'Scheduling retry|retry|Max retries' logs/nanoclaw.log | tail -10
 ## Agent Not Responding
 
 ```bash
-# Check if messages are being received from WhatsApp
+# Check if messages are being received from Slack
 grep 'New messages' logs/nanoclaw.log | tail -10
 
 # Check if messages are being processed (container spawned)
@@ -110,17 +110,17 @@ sqlite3 store/messages.db "SELECT name, container_config FROM registered_groups;
 container run -i --rm --entrypoint ls nanoclaw-agent:latest /workspace/extra/
 ```
 
-## WhatsApp Auth Issues
+## Slack Auth Issues
 
 ```bash
-# Check if QR code was requested (means auth expired)
-grep 'QR\|authentication required\|qr' logs/nanoclaw.log | tail -5
+# Check Slack token configuration
+grep -E 'SLACK_BOT_TOKEN|SLACK_APP_TOKEN' .env
 
-# Check auth files exist
-ls -la store/auth/
+# Validate tokens
+./.claude/skills/setup/scripts/04-auth-slack.sh
 
-# Re-authenticate if needed
-npm run auth
+# Check for connection errors
+grep -E 'Missing SLACK|Slack.*error|Socket Mode' logs/nanoclaw.log | tail -5
 ```
 
 ## Service Management

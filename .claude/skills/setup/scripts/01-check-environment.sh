@@ -67,9 +67,11 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
 fi
 
 HAS_AUTH="false"
-if [ -d "$PROJECT_ROOT/store/auth" ] && [ "$(ls -A "$PROJECT_ROOT/store/auth" 2>/dev/null)" ]; then
-  HAS_AUTH="true"
-  log "WhatsApp auth credentials found"
+if [ -f "$PROJECT_ROOT/.env" ]; then
+  if grep -qE "^SLACK_BOT_TOKEN=" "$PROJECT_ROOT/.env" 2>/dev/null && grep -qE "^SLACK_APP_TOKEN=" "$PROJECT_ROOT/.env" 2>/dev/null; then
+    HAS_AUTH="true"
+    log "Slack tokens found in .env"
+  fi
 fi
 
 HAS_REGISTERED_GROUPS="false"
