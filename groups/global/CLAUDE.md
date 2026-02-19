@@ -52,12 +52,25 @@ When you learn something important:
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
-## Message Formatting
+## Message Formatting (Slack)
 
-NEVER use markdown. Only use WhatsApp/Telegram formatting:
-- *single asterisks* for bold (NEVER **double asterisks**)
-- _underscores_ for italic
-- • bullet points
-- ```triple backticks``` for code
+Use Slack's mrkdwn format:
+- *bold* (single asterisks)
+- _italic_ (underscores)
+- `inline code` and ```code blocks```
+- ~strikethrough~
+- • Bullet points
+- <url|link text> for links
 
-No ## headings. No [links](url). No **double stars**.
+No markdown headings (##). No **double asterisks**.
+
+## Emoji Reactions
+
+You can react to messages using `mcp__nanoclaw__add_reaction`. Each message in the conversation has an `id` attribute you can reference.
+
+Use reactions to:
+- Acknowledge a request quickly (:eyes:, :thumbsup:)
+- Signal completion (:white_check_mark:)
+- Ask yes/no questions — tell the user to react with specific emojis (e.g., ":thumbsup: for yes, :thumbsdown: for no") and you'll see their reaction as a message
+
+When a user reacts to a message, you'll receive it as `[reacted with :emoji: to message <id>]`.

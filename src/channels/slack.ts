@@ -31,12 +31,15 @@ export interface StatusData {
   recentRuns: Array<TaskRunLog & { task_prompt: string | null }>;
 }
 
+export type LookupMessageThreadTs = (chatJid: string, messageId: string) => string | null;
+
 export interface SlackChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   onMessageDelete?: OnMessageDelete;
   registeredGroups: () => Record<string, RegisteredGroup>;
   getStatusData?: () => StatusData;
+  lookupMessageThreadTs?: LookupMessageThreadTs;
 }
 
 export class SlackChannel implements Channel {
@@ -113,6 +116,54 @@ export class SlackChannel implements Channel {
       if (!user && !eventFiles?.length) return;
 
       await this.handleEvent(event.channel, user, text || '', ts, false, undefined, eventFiles);
+    });
+
+    // Handle emoji reactions
+    this.app.event('reaction_added', async ({ event }) => {
+      if (!event.user || event.user === this.botUserId) return;
+      if (event.item.type !== 'message') return;
+
+      const channel = event.item.channel;
+      const messageTs = event.item.ts;
+
+      const groups = this.opts.registeredGroups();
+      if (!groups[channel]) return;
+
+      const senderName = await this.resolveDisplayName(event.user);
+      const timestamp = new Date(parseFloat(event.event_ts) * 1000).toISOString();
+
+      // Look up the reacted-to message's thread_ts so the reaction
+      // appears in the correct thread context
+      let threadTs: string | undefined;
+      if (this.opts.lookupMessageThreadTs) {
+        const dbThreadTs = this.opts.lookupMessageThreadTs(channel, messageTs);
+        threadTs = dbThreadTs || undefined;
+      }
+      // If the reacted-to message IS a thread parent, use it as the thread
+      if (!threadTs && messageTs !== event.event_ts) {
+        // Check if messageTs is itself a thread parent by checking if it has replies
+        // Simple heuristic: if we didn't find it in DB with a thread_ts, it's likely
+        // a top-level message. Use messageTs as the thread so the reaction is contextualized.
+        threadTs = messageTs;
+      }
+
+      this.opts.onMessage(channel, {
+        id: `reaction-${event.event_ts}`,
+        chat_jid: channel,
+        sender: event.user,
+        sender_name: senderName,
+        content: `[reacted with :${event.reaction}: to message ${messageTs}]`,
+        timestamp,
+        is_from_me: false,
+        is_bot_message: false,
+        thread_ts: threadTs,
+        is_reaction: true,
+      });
+
+      logger.debug(
+        { channel, user: event.user, reaction: event.reaction, messageTs },
+        'Reaction received',
+      );
     });
 
     // Register /corey slash command
@@ -392,7 +443,7 @@ export class SlackChannel implements Channel {
     }
   }
 
-  async sendMessage(jid: string, text: string, threadTs?: string): Promise<void> {
+  async sendMessage(jid: string, text: string, threadTs?: string): Promise<string | void> {
     // No assistant name prefix — Slack shows bot identity natively
 
     if (!this.connected) {
@@ -407,14 +458,17 @@ export class SlackChannel implements Channel {
     try {
       // Split long messages on newline boundaries
       const chunks = this.splitMessage(text);
+      let lastTs: string | undefined;
       for (const chunk of chunks) {
-        await this.app.client.chat.postMessage({
+        const result = await this.app.client.chat.postMessage({
           channel: jid,
           text: chunk,
           ...(threadTs && { thread_ts: threadTs }),
         });
+        lastTs = result.ts;
       }
       logger.info({ jid, length: text.length, chunks: chunks.length, threadTs }, 'Message sent');
+      return lastTs;
     } catch (err) {
       this.outgoingQueue.push({ jid, text, threadTs });
       logger.warn(
@@ -432,6 +486,122 @@ export class SlackChannel implements Channel {
     return /^[CDG][A-Z0-9]+$/.test(jid);
   }
 
+  /**
+   * Catch up on messages missed while offline.
+   * Uses Slack Web API to fetch channel history since the last known message.
+   */
+  async catchUpMessages(
+    channels: Array<{ jid: string; latestTs: string | null }>,
+  ): Promise<number> {
+    let totalCaughtUp = 0;
+
+    for (const { jid, latestTs } of channels) {
+      try {
+        // Fetch messages since the last known one (or last 12h if no history)
+        const oldest = latestTs || String(Date.now() / 1000 - 12 * 60 * 60);
+
+        const result = await this.app.client.conversations.history({
+          channel: jid,
+          oldest,
+          limit: 200,
+          inclusive: false, // exclude the message at oldest
+        });
+
+        if (!result.messages || result.messages.length === 0) continue;
+
+        // Process messages oldest-first
+        const msgs = result.messages.reverse();
+
+        for (const msg of msgs) {
+          // Skip bot messages and subtypes (joins, topic changes, etc.)
+          if (msg.bot_id || (msg.subtype && msg.subtype !== 'file_share')) continue;
+          if (!msg.ts || !msg.user) continue;
+
+          const senderName = await this.resolveDisplayName(msg.user);
+          let text = msg.text || '';
+          // Strip bot mention
+          if (this.botUserId) {
+            text = text.replace(new RegExp(`<@${this.botUserId}>\\s*`, 'g'), '').trim();
+          }
+
+          const timestamp = new Date(parseFloat(msg.ts) * 1000).toISOString();
+          // For thread replies, use the parent's ts. For top-level messages that
+          // mention the bot, use the message's own ts so replies create a thread
+          // (matching the app_mention handler behavior).
+          const isMention = (msg.text || '').includes(`<@${this.botUserId}>`);
+          let threadTs: string | undefined;
+          if (msg.thread_ts && msg.thread_ts !== msg.ts) {
+            threadTs = msg.thread_ts; // Reply in existing thread
+          } else if (isMention || (msg.reply_count && msg.reply_count > 0)) {
+            threadTs = msg.ts; // Thread parent or mention — replies go here
+          }
+
+          this.opts.onChatMetadata(jid, timestamp);
+          this.opts.onMessage(jid, {
+            id: msg.ts,
+            chat_jid: jid,
+            sender: msg.user,
+            sender_name: senderName,
+            content: text || '[message]',
+            timestamp,
+            is_from_me: false,
+            is_bot_message: false,
+            thread_ts: threadTs,
+          });
+          totalCaughtUp++;
+
+          // If this message has replies and is a thread parent, fetch thread replies
+          if (msg.reply_count && msg.reply_count > 0) {
+            try {
+              const repliesResult = await this.app.client.conversations.replies({
+                channel: jid,
+                ts: msg.ts,
+                oldest,
+                limit: 200,
+                inclusive: false,
+              });
+
+              if (repliesResult.messages) {
+                for (const reply of repliesResult.messages) {
+                  // Skip the parent message (already stored) and bot messages
+                  if (reply.ts === msg.ts) continue;
+                  if (reply.bot_id || ((reply as any).subtype && (reply as any).subtype !== 'file_share')) continue;
+                  if (!reply.ts || !reply.user) continue;
+
+                  const replySenderName = await this.resolveDisplayName(reply.user);
+                  let replyText = reply.text || '';
+                  if (this.botUserId) {
+                    replyText = replyText.replace(new RegExp(`<@${this.botUserId}>\\s*`, 'g'), '').trim();
+                  }
+
+                  const replyTimestamp = new Date(parseFloat(reply.ts) * 1000).toISOString();
+                  this.opts.onMessage(jid, {
+                    id: reply.ts,
+                    chat_jid: jid,
+                    sender: reply.user,
+                    sender_name: replySenderName,
+                    content: replyText || '[message]',
+                    timestamp: replyTimestamp,
+                    is_from_me: false,
+                    is_bot_message: false,
+                    thread_ts: msg.ts,
+                  });
+                  totalCaughtUp++;
+                }
+              }
+            } catch (err) {
+              logger.warn({ jid, threadTs: msg.ts, err }, 'Failed to fetch thread replies during catch-up');
+            }
+          }
+        }
+      } catch (err) {
+        logger.warn({ jid, err }, 'Failed to catch up messages for channel');
+      }
+    }
+
+    return totalCaughtUp;
+  }
+
   async disconnect(): Promise<void> {
     this.connected = false;
     try {
@@ -443,6 +613,26 @@ export class SlackChannel implements Channel {
 
   async setTyping(_jid: string, _isTyping: boolean): Promise<void> {
     // No-op: Slack API doesn't support bot typing indicators
+  }
+
+  async addReaction(channel: string, emoji: string, messageTs: string): Promise<void> {
+    try {
+      await this.app.client.reactions.add({ channel, name: emoji, timestamp: messageTs });
+      logger.info({ channel, emoji, messageTs }, 'Reaction added');
+    } catch (err) {
+      logger.warn({ channel, emoji, messageTs, err }, 'Failed to add reaction');
+      throw err;
+    }
+  }
+
+  async removeReaction(channel: string, emoji: string, messageTs: string): Promise<void> {
+    try {
+      await this.app.client.reactions.remove({ channel, name: emoji, timestamp: messageTs });
+      logger.info({ channel, emoji, messageTs }, 'Reaction removed');
+    } catch (err) {
+      logger.warn({ channel, emoji, messageTs, err }, 'Failed to remove reaction');
+      throw err;
+    }
   }
 
   async sendFile(

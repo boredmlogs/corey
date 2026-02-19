@@ -59,6 +59,7 @@ export interface NewMessage {
   is_bot_message?: boolean;
   thread_ts?: string;
   files?: MessageFile[];
+  is_reaction?: boolean;
 }
 
 // Callback for message deletion (edit/delete awareness)
@@ -93,7 +94,7 @@ export interface TaskRunLog {
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string): Promise<void>;
+  sendMessage(jid: string, text: string, threadTs?: string): Promise<string | void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;
@@ -101,6 +102,9 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: file upload. Channels that support it implement it.
   sendFile?(jid: string, filePath: string, filename?: string, title?: string, comment?: string, threadTs?: string): Promise<void>;
+  // Optional: emoji reactions. Channels that support them implement these.
+  addReaction?(jid: string, emoji: string, messageTs: string): Promise<void>;
+  removeReaction?(jid: string, emoji: string, messageTs: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

@@ -114,6 +114,15 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* column already exists */
   }
+
+  // Add is_reaction column if it doesn't exist (migration for emoji reactions)
+  try {
+    database.exec(
+      `ALTER TABLE messages ADD COLUMN is_reaction INTEGER DEFAULT 0`,
+    );
+  } catch {
+    /* column already exists */
+  }
 }
 
 export function initDatabase(): void {
@@ -226,7 +235,7 @@ export function setLastGroupSync(): void {
  */
 export function storeMessage(msg: NewMessage): void {
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_ts, files_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_ts, files_json, is_reaction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
@@ -238,6 +247,7 @@ export function storeMessage(msg: NewMessage): void {
     msg.is_bot_message ? 1 : 0,
     msg.thread_ts || null,
     msg.files?.length ? JSON.stringify(msg.files) : null,
+    msg.is_reaction ? 1 : 0,
   );
 }
 
@@ -281,7 +291,7 @@ export function getNewMessages(
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
   const sql = `
-    SELECT id, chat_jid, sender, sender_name, content, timestamp, thread_ts, files_json
+    SELECT id, chat_jid, sender, sender_name, content, timestamp, thread_ts, files_json, is_reaction
     FROM messages
     WHERE timestamp > ? AND chat_jid IN (${placeholders})
       AND is_bot_message = 0 AND content NOT LIKE ?
@@ -296,6 +306,8 @@ export function getNewMessages(
       row.files = JSON.parse(row.files_json);
     }
     delete row.files_json;
+    // SQLite stores booleans as 0/1; convert to proper boolean
+    (row as any).is_reaction = (row as any).is_reaction === 1 ? true : undefined;
   }
 
   let newTimestamp = lastTimestamp;
@@ -314,7 +326,7 @@ export function getMessagesSince(
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
   const sql = `
-    SELECT id, chat_jid, sender, sender_name, content, timestamp, thread_ts, files_json
+    SELECT id, chat_jid, sender, sender_name, content, timestamp, thread_ts, files_json, is_reaction
     FROM messages
     WHERE chat_jid = ? AND timestamp > ?
       AND is_bot_message = 0 AND content NOT LIKE ?
@@ -328,8 +340,30 @@ export function getMessagesSince(
       row.files = JSON.parse(row.files_json);
     }
     delete row.files_json;
+    // SQLite stores booleans as 0/1; convert to proper boolean
+    (row as any).is_reaction = (row as any).is_reaction === 1 ? true : undefined;
   }
   return rows;
+}
+
+export function getMessageById(
+  messageId: string,
+  chatJid: string,
+): { thread_ts: string | null } | undefined {
+  return db
+    .prepare('SELECT thread_ts FROM messages WHERE id = ? AND chat_jid = ?')
+    .get(messageId, chatJid) as { thread_ts: string | null } | undefined;
+}
+
+/**
+ * Get the Slack ts of the most recent message stored for a channel.
+ * Returns the message `id` (which is the Slack ts) for use with conversations.history oldest param.
+ */
+export function getLatestMessageTs(chatJid: string): string | null {
+  const row = db
+    .prepare('SELECT MAX(id) as latest_ts FROM messages WHERE chat_jid = ?')
+    .get(chatJid) as { latest_ts: string | null } | undefined;
+  return row?.latest_ts || null;
 }
 
 export function deleteMessage(messageId: string, chatJid: string): void {

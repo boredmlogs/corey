@@ -42,13 +42,14 @@ const server = new McpServer({
 
 server.tool(
   'send_message',
-  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times. Note: when running as a scheduled task, your final output is NOT sent to the user — use this tool if you need to communicate with the user or group.",
+  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times. Note: when running as a scheduled task, your final output is NOT sent to the user — use this tool if you need to communicate with the user or group. You can optionally attach emoji reactions to the sent message (useful for yes/no prompts).",
   {
     text: z.string().describe('The message text to send'),
     sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
+    reactions: z.array(z.string()).optional().describe('Emoji names to add as reactions to this message (e.g., ["thumbsup", "thumbsdown"] for yes/no prompts). Users can click these to respond.'),
   },
   async (args) => {
-    const data: Record<string, string | undefined> = {
+    const data: Record<string, string | string[] | undefined> = {
       type: 'message',
       chatJid,
       text: args.text,
@@ -57,6 +58,9 @@ server.tool(
       threadTs,
       timestamp: new Date().toISOString(),
     };
+    if (args.reactions?.length) {
+      data.reactions = args.reactions;
+    }
 
     writeIpcFile(MESSAGES_DIR, data);
 
@@ -105,6 +109,52 @@ server.tool(
     writeIpcFile(MESSAGES_DIR, data);
 
     return { content: [{ type: 'text' as const, text: `File "${args.file_path}" sent.` }] };
+  },
+);
+
+server.tool(
+  'add_reaction',
+  'Add an emoji reaction to a specific message. Use this to react to user messages (e.g., thumbsup for acknowledgment, eyes for "looking into it", white_check_mark for done). The message_id comes from the "id" attribute on <message> tags in the conversation.',
+  {
+    emoji: z.string().describe('Slack emoji name without colons (e.g., "thumbsup", "white_check_mark", "eyes", "tada")'),
+    message_id: z.string().describe('The message ID (Slack ts) to react to — from the "id" attribute on <message> tags'),
+  },
+  async (args) => {
+    const data = {
+      type: 'add_reaction',
+      chatJid,
+      emoji: args.emoji,
+      messageTs: args.message_id,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: `Reaction :${args.emoji}: added.` }] };
+  },
+);
+
+server.tool(
+  'remove_reaction',
+  'Remove an emoji reaction from a specific message.',
+  {
+    emoji: z.string().describe('Slack emoji name without colons (e.g., "thumbsup", "eyes")'),
+    message_id: z.string().describe('The message ID (Slack ts) to remove the reaction from'),
+  },
+  async (args) => {
+    const data = {
+      type: 'remove_reaction',
+      chatJid,
+      emoji: args.emoji,
+      messageTs: args.message_id,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: `Reaction :${args.emoji}: removed.` }] };
   },
 );
 
@@ -286,11 +336,11 @@ server.tool(
 
 server.tool(
   'register_group',
-  `Register a new WhatsApp group so the agent can respond to messages there. Main group only.
+  `Register a new Slack channel so the agent can respond to messages there. Main group only.
 
-Use available_groups.json to find the JID for a group. The folder name should be lowercase with hyphens (e.g., "family-chat").`,
+Use available_groups.json to find the channel ID. The folder name should be lowercase with hyphens (e.g., "family-chat").`,
   {
-    jid: z.string().describe('The WhatsApp JID (e.g., "120363336345536173@g.us")'),
+    jid: z.string().describe('The Slack channel ID (e.g., "C1234567890")'),
     name: z.string().describe('Display name for the group'),
     folder: z.string().describe('Folder name for group files (lowercase, hyphens, e.g., "family-chat")'),
     trigger: z.string().describe('Trigger word (e.g., "@Andy")'),

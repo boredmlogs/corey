@@ -23,7 +23,9 @@ import {
   getAllRegisteredGroups,
   getAllSessions,
   getAllTasks,
+  getMessageById,
   getMessagesSince,
+  getLatestMessageTs,
   getNewMessages,
   getRecentTaskRuns,
   getRouterState,
@@ -152,10 +154,10 @@ async function processThread(
   const pending = threadMessages.filter((m) => m.timestamp > threadCursor);
   if (pending.length === 0) return true;
 
-  // Check trigger per-thread
+  // Check trigger per-thread (reactions bypass trigger check)
   if (!isMainGroup && group.requiresTrigger !== false) {
     const hasTrigger = pending.some((m) =>
-      TRIGGER_PATTERN.test(m.content.trim()),
+      m.is_reaction || TRIGGER_PATTERN.test(m.content.trim()),
     );
     if (!hasTrigger) return true;
   }
@@ -465,9 +467,10 @@ async function startMessageLoop(): Promise<void> {
             // For non-main groups, only act on trigger messages per-thread.
             // Non-trigger messages accumulate in DB and get pulled as
             // context when a trigger eventually arrives.
+            // Reactions bypass the trigger check.
             if (needsTrigger) {
               const hasTrigger = threadMsgs.some((m) =>
-                TRIGGER_PATTERN.test(m.content.trim()),
+                m.is_reaction || TRIGGER_PATTERN.test(m.content.trim()),
               );
               if (!hasTrigger) continue;
             }
@@ -603,10 +606,30 @@ async function main(): Promise<void> {
       tasks: getAllTasks().filter((t) => t.status === 'active'),
       recentRuns: getRecentTaskRuns(5),
     }),
+    lookupMessageThreadTs: (chatJid, messageId) => {
+      const msg = getMessageById(messageId, chatJid);
+      return msg?.thread_ts || null;
+    },
   });
 
   // Connect — resolves when Socket Mode is ready
   await slack.connect();
+
+  // Catch up on messages missed while offline (Socket Mode doesn't replay events)
+  const channelsToSync = Object.keys(registeredGroups).map((jid) => ({
+    jid,
+    latestTs: getLatestMessageTs(jid),
+  }));
+  if (channelsToSync.length > 0) {
+    try {
+      const caught = await slack.catchUpMessages(channelsToSync);
+      if (caught > 0) {
+        logger.info({ count: caught }, 'Caught up on missed messages');
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Message catch-up failed (will rely on live events)');
+    }
+  }
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
@@ -623,6 +646,8 @@ async function main(): Promise<void> {
   startIpcWatcher({
     sendMessage: (jid, text, threadTs) => slack.sendMessage(jid, text, threadTs),
     sendFile: (jid, filePath, filename, title, comment, threadTs) => slack.sendFile(jid, filePath, filename, title, comment, threadTs),
+    addReaction: (jid, emoji, messageTs) => slack.addReaction(jid, emoji, messageTs),
+    removeReaction: (jid, emoji, messageTs) => slack.removeReaction(jid, emoji, messageTs),
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroupMetadata: (_force) => slack.syncChannelMetadata(),

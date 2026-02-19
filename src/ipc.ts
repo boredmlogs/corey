@@ -16,8 +16,10 @@ import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
-  sendMessage: (jid: string, text: string, threadTs?: string) => Promise<void>;
+  sendMessage: (jid: string, text: string, threadTs?: string) => Promise<string | void>;
   sendFile: (jid: string, filePath: string, filename?: string, title?: string, comment?: string, threadTs?: string) => Promise<void>;
+  addReaction: (jid: string, emoji: string, messageTs: string) => Promise<void>;
+  removeReaction: (jid: string, emoji: string, messageTs: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroupMetadata: (force: boolean) => Promise<void>;
@@ -80,7 +82,15 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await deps.sendMessage(data.chatJid, data.text, data.threadTs);
+                  const sentTs = await deps.sendMessage(data.chatJid, data.text, data.threadTs);
+                  // Add reactions to the sent message if requested
+                  if (sentTs && Array.isArray(data.reactions) && data.reactions.length > 0) {
+                    for (const emoji of data.reactions) {
+                      await deps.addReaction(data.chatJid, emoji, sentTs).catch((err) => {
+                        logger.warn({ chatJid: data.chatJid, emoji, err }, 'Failed to add reaction to sent message');
+                      });
+                    }
+                  }
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup, threadTs: data.threadTs },
                     'IPC message sent',
@@ -89,6 +99,40 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
+                  );
+                }
+              } else if (data.type === 'add_reaction' && data.chatJid && data.emoji && data.messageTs) {
+                const targetGroup = registeredGroups[data.chatJid];
+                if (
+                  isMain ||
+                  (targetGroup && targetGroup.folder === sourceGroup)
+                ) {
+                  await deps.addReaction(data.chatJid, data.emoji, data.messageTs);
+                  logger.info(
+                    { chatJid: data.chatJid, emoji: data.emoji, sourceGroup },
+                    'IPC reaction added',
+                  );
+                } else {
+                  logger.warn(
+                    { chatJid: data.chatJid, sourceGroup },
+                    'Unauthorized IPC add_reaction attempt blocked',
+                  );
+                }
+              } else if (data.type === 'remove_reaction' && data.chatJid && data.emoji && data.messageTs) {
+                const targetGroup = registeredGroups[data.chatJid];
+                if (
+                  isMain ||
+                  (targetGroup && targetGroup.folder === sourceGroup)
+                ) {
+                  await deps.removeReaction(data.chatJid, data.emoji, data.messageTs);
+                  logger.info(
+                    { chatJid: data.chatJid, emoji: data.emoji, sourceGroup },
+                    'IPC reaction removed',
+                  );
+                } else {
+                  logger.warn(
+                    { chatJid: data.chatJid, sourceGroup },
+                    'Unauthorized IPC remove_reaction attempt blocked',
                   );
                 }
               } else if (data.type === 'send_file' && data.chatJid && data.filePath) {

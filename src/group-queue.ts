@@ -1,4 +1,4 @@
-import { ChildProcess } from 'child_process';
+import { ChildProcess, execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -351,15 +351,29 @@ export class GroupQueue {
     const activeContainers: string[] = [];
     for (const [_jid, state] of this.groups) {
       for (const [_threadKey, thread] of state.threads) {
-        if (thread.process && !thread.process.killed && thread.containerName) {
+        if (thread.containerName) {
           activeContainers.push(thread.containerName);
         }
       }
     }
 
-    logger.info(
-      { activeCount: this.activeCount, detachedContainers: activeContainers },
-      'GroupQueue shutting down (containers detached, not killed)',
-    );
+    if (activeContainers.length > 0) {
+      logger.info(
+        { activeCount: this.activeCount, containers: activeContainers },
+        'GroupQueue shutting down, stopping containers',
+      );
+      // Stop all containers in parallel with a short timeout
+      await Promise.allSettled(
+        activeContainers.map((name) => {
+          try {
+            execSync(`docker stop -t 5 ${name}`, { stdio: 'pipe', timeout: 10000 });
+          } catch {
+            // Container may have already exited
+          }
+        }),
+      );
+    } else {
+      logger.info('GroupQueue shutting down (no active containers)');
+    }
   }
 }

@@ -62,7 +62,7 @@ describe('formatMessages', () => {
     const result = formatMessages([makeMsg()]);
     expect(result).toBe(
       '<messages>\n' +
-        '<message sender="Alice" time="2024-01-01T00:00:00.000Z">hello</message>\n' +
+        '<message sender="Alice" time="2024-01-01T00:00:00.000Z" id="1">hello</message>\n' +
         '</messages>',
     );
   });

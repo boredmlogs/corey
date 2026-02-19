@@ -18,7 +18,7 @@ export function formatMessages(messages: NewMessage[]): string {
         inner += `\n<file name="${escapeXml(f.name)}" type="${escapeXml(f.mimetype)}" path="${escapeXml(containerPath)}" />`;
       }
     }
-    return `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${inner}</message>`;
+    return `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}" id="${escapeXml(m.id)}">${inner}</message>`;
   });
   return `<messages>\n${lines.join('\n')}\n</messages>`;
 }
@@ -41,7 +41,7 @@ export function routeOutbound(
   channels: Channel[],
   jid: string,
   text: string,
-): Promise<void> {
+): Promise<string | void> {
   const channel = channels.find((c) => c.ownsJid(jid) && c.isConnected());
   if (!channel) throw new Error(`No channel for JID: ${jid}`);
   return channel.sendMessage(jid, text);
