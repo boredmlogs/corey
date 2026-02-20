@@ -201,6 +201,17 @@ function buildVolumeMounts(
     readonly: true,
   });
 
+  // Shared MCP auth directory for OAuth tokens (e.g., Datadog remote MCP)
+  // Persisted across container runs so OAuth doesn't need to be repeated
+  const mcpAuthDir = path.join(DATA_DIR, 'mcp-auth');
+  fs.mkdirSync(mcpAuthDir, { recursive: true });
+  try { fs.chownSync(mcpAuthDir, 1000, 1000); } catch { /* non-root host */ }
+  mounts.push({
+    hostPath: mcpAuthDir,
+    containerPath: '/home/node/.mcp-auth',
+    readonly: false,
+  });
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(

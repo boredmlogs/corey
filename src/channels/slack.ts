@@ -129,6 +129,21 @@ export class SlackChannel implements Channel {
       const groups = this.opts.registeredGroups();
       if (!groups[channel]) return;
 
+      // Only process reactions on the bot's own messages
+      try {
+        const history = await this.app.client.conversations.history({
+          channel,
+          latest: messageTs,
+          inclusive: true,
+          limit: 1,
+        });
+        const msg = history.messages?.[0];
+        if (!msg || msg.user !== this.botUserId) return;
+      } catch (err) {
+        logger.debug({ channel, messageTs, err }, 'Failed to look up reacted-to message');
+        return;
+      }
+
       const senderName = await this.resolveDisplayName(event.user);
       const timestamp = new Date(parseFloat(event.event_ts) * 1000).toISOString();
 
@@ -443,6 +458,33 @@ export class SlackChannel implements Channel {
     }
   }
 
+  /**
+   * Convert @Name mentions in outgoing text to Slack's <@UXXXXXXXX> format.
+   * Uses the display name cache (populated from incoming messages) for reverse lookup.
+   */
+  private resolveMentions(text: string): string {
+    if (!text.includes('@')) return text;
+
+    // Build reverse map: lowercase display name → user ID
+    const nameToId = new Map<string, string>();
+    for (const [userId, name] of this.displayNameCache) {
+      nameToId.set(name.toLowerCase(), userId);
+    }
+    if (nameToId.size === 0) return text;
+
+    // Sort names longest-first so "Matt Weiss" matches before "Matt"
+    const names = Array.from(nameToId.keys()).sort((a, b) => b.length - a.length);
+
+    for (const name of names) {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Match both @Name and <@Name> (agent sometimes wraps in angle brackets)
+      const pattern = new RegExp(`<@${escaped}>|@${escaped}\\b`, 'gi');
+      text = text.replace(pattern, `<@${nameToId.get(name)}>`);
+    }
+
+    return text;
+  }
+
   async sendMessage(jid: string, text: string, threadTs?: string): Promise<string | void> {
     // No assistant name prefix — Slack shows bot identity natively
 
@@ -454,6 +496,9 @@ export class SlackChannel implements Channel {
       );
       return;
     }
+
+    // Convert @Name mentions to Slack's <@UXXXXXXXX> format
+    text = this.resolveMentions(text);
 
     try {
       // Split long messages on newline boundaries

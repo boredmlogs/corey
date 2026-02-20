@@ -469,22 +469,15 @@ async function runQuery(
           args: ['-y', '@stripe/mcp', `--api-key=${sdkEnv.STRIPE_SECRET_KEY || ''}`],
         },
         datadog: {
-          command: 'npx',
-          args: [
-            '-y', 'datadog-mcp-server',
-            `--apiKey=${sdkEnv.DD_API_KEY || ''}`,
-            `--appKey=${sdkEnv.DD_APP_KEY || ''}`,
-            `--site=${sdkEnv.DD_SITE || 'datadoghq.com'}`,
-          ],
+          type: 'http' as const,
+          url: `https://mcp.${sdkEnv.DD_SITE || 'datadoghq.com'}/api/unstable/mcp-server/mcp?toolsets=core,onboarding`,
         },
         linear: {
-          command: 'npx',
-          args: [
-            '-y', 'mcp-remote',
-            'https://mcp.linear.app/mcp',
-            '--header',
-            `Authorization:Bearer ${sdkEnv.LINEAR_API_KEY || ''}`,
-          ],
+          type: 'http' as const,
+          url: 'https://mcp.linear.app/mcp',
+          headers: {
+            Authorization: `Bearer ${sdkEnv.LINEAR_API_KEY || ''}`,
+          },
         },
       },
       hooks: {
