@@ -219,7 +219,7 @@ function buildVolumeMounts(
  * Secrets are never written to disk or mounted as files.
  */
 function readSecrets(): Record<string, string> {
-  return readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'HUBSPOT_ACCESS_TOKEN', 'STRIPE_SECRET_KEY', 'DD_API_KEY', 'DD_APP_KEY', 'DD_SITE']);
+  return readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'HUBSPOT_ACCESS_TOKEN', 'STRIPE_SECRET_KEY', 'DD_API_KEY', 'DD_APP_KEY', 'DD_SITE', 'LINEAR_API_KEY']);
 }
 
 function buildContainerArgs(mounts: VolumeMount[], containerName: string): string[] {

@@ -191,7 +191,7 @@ function createPreCompactHook(): HookCallback {
 // Secrets to strip from Bash tool subprocess environments.
 // These are needed by claude-code for API auth but should never
 // be visible to commands Kit runs.
-const SECRET_ENV_VARS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'HUBSPOT_ACCESS_TOKEN', 'STRIPE_SECRET_KEY', 'DD_API_KEY', 'DD_APP_KEY'];
+const SECRET_ENV_VARS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'HUBSPOT_ACCESS_TOKEN', 'STRIPE_SECRET_KEY', 'DD_API_KEY', 'DD_APP_KEY', 'LINEAR_API_KEY'];
 
 function createSanitizeBashHook(): HookCallback {
   return async (input, _toolUseId, _context) => {
@@ -439,7 +439,8 @@ async function runQuery(
         'mcp__nanoclaw__*',
         'mcp__hubspot__*',
         'mcp__stripe__*',
-        'mcp__datadog__*'
+        'mcp__datadog__*',
+        'mcp__linear__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -474,6 +475,15 @@ async function runQuery(
             `--apiKey=${sdkEnv.DD_API_KEY || ''}`,
             `--appKey=${sdkEnv.DD_APP_KEY || ''}`,
             `--site=${sdkEnv.DD_SITE || 'datadoghq.com'}`,
+          ],
+        },
+        linear: {
+          command: 'npx',
+          args: [
+            '-y', 'mcp-remote',
+            'https://mcp.linear.app/mcp',
+            '--header',
+            `Authorization:Bearer ${sdkEnv.LINEAR_API_KEY || ''}`,
           ],
         },
       },
