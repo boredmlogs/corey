@@ -16,6 +16,7 @@ import {
   getDueTasks,
   getTaskById,
   logTaskRun,
+  updateTask,
   updateTaskAfterRun,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
@@ -158,17 +159,16 @@ async function runTask(
     error,
   });
 
-  let nextRun: string | null = null;
-  if (task.schedule_type === 'cron') {
-    const interval = CronExpressionParser.parse(task.schedule_value, {
-      tz: TIMEZONE,
-    });
-    nextRun = interval.next().toISOString();
-  } else if (task.schedule_type === 'interval') {
-    const ms = parseInt(task.schedule_value, 10);
-    nextRun = new Date(Date.now() + ms).toISOString();
+  // next_run was already advanced before enqueueing to prevent duplicate firing.
+  // Re-read it from the DB so updateTaskAfterRun preserves that value.
+  const updatedTask = getTaskById(task.id);
+  let nextRun = updatedTask?.next_run ?? null;
+
+  // For one-shot tasks that failed, restore next_run so the scheduler retries them.
+  if (error && task.schedule_type === 'once' && !nextRun) {
+    nextRun = new Date().toISOString();
+    logger.info({ taskId: task.id }, 'One-shot task failed, scheduling retry');
   }
-  // 'once' tasks have no next run
 
   const resultSummary = error
     ? `Error: ${error}`
@@ -201,6 +201,21 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
         if (!currentTask || currentTask.status !== 'active') {
           continue;
         }
+
+        // Advance next_run immediately to prevent duplicate firing on the next poll.
+        // Without this, a task that takes >60s would be picked up again by getDueTasks().
+        let nextRun: string | null = null;
+        if (currentTask.schedule_type === 'cron') {
+          const interval = CronExpressionParser.parse(currentTask.schedule_value, {
+            tz: TIMEZONE,
+          });
+          nextRun = interval.next().toISOString();
+        } else if (currentTask.schedule_type === 'interval') {
+          const ms = parseInt(currentTask.schedule_value, 10);
+          nextRun = new Date(Date.now() + ms).toISOString();
+        }
+        // 'once' tasks: nextRun stays null, removing them from getDueTasks()
+        updateTask(currentTask.id, { next_run: nextRun });
 
         deps.queue.enqueueTask(
           currentTask.chat_jid,

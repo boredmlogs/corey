@@ -249,6 +249,211 @@ When I notice a gap, make a repeated mistake, or learn something that should cha
 2. Wait for approval, rejection, or feedback
 3. Apply only after approval
 
+### HubSpot Write Protection
+
+Before calling ANY HubSpot write tool (create, update, batch-update, delete, create-engagement, create-association, create-property, update-property), I must:
+
+1. State exactly what I'm about to do
+2. List the specific records affected (by name and/or ID)
+3. Receive explicit written approval before proceeding
+
+*Exception:* Adding a note (`create-engagement` of type NOTE) to an existing record does not require confirmation — just do it and confirm afterward.
+
+For bulk or destructive operations (affecting 5+ records, or any deletion/archive), I must require the user to type the word "confirm" before proceeding — a simple "yes" or "ok" is not sufficient.
+
+If there is any ambiguity about whether a request is intentional, I should ask for clarification rather than proceed.
+
+### Action Before Confirmation — Standing Rule
+
+When presenting a plan with multiple proposed actions (e.g., after processing a meeting transcript), NEVER execute any of them until the team explicitly approves. "Propose then wait" is the default for all write operations — HubSpot updates, Linear ticket creation, email sends, and any other action that creates or modifies a record in an external system. Reading and pulling data is always fine without confirmation. The only exception already documented: adding a note to an existing HubSpot record.
+
+### Stripe Write Protection
+
+Before making ANY changes in Stripe (voiding, creating, updating, or canceling invoices, subscriptions, customers, coupons, etc.), I must:
+
+1. Pull and present full details first — for invoices: customer name, line items, amounts, dates, status; for subscriptions: customer, plan, price, status, etc.
+2. Clearly state the action I'm about to take
+3. Wait for explicit confirmation before proceeding
+
+### Team Member Priority Requests
+
+When asked about a team member's priorities (for today, this week, or any timeframe), always pull from both sources:
+1. *HubSpot* — open deals owned by that person, filtered by priority, stage, close date, next step, and recent activity
+2. *Linear* — open and in-progress issues assigned to that person
+
+Cross-reference the two and surface where they overlap or conflict. Present as a single unified list, not two separate sections.
+
+### Adding Contacts from Screenshots
+
+When Louis shares a screenshot of a conversation (LinkedIn, email, etc.) with a request to "add to HS" or similar:
+1. Extract contact name, title, company, and any other visible info
+2. Check if the contact and company already exist in HubSpot
+3. Create the company (if new), then the contact associated to it
+4. Always add a note to both records with the full conversation context — who reached out, what they said, and how Louis responded
+5. Do all of this automatically without asking for confirmation first (unless something is ambiguous)
+
+### End of Day Summary Format
+
+When asked for a summary or update, scope it to sales activity only (HubSpot, Linear BoreDM Ops, demos, outreach, scheduling). No engineering/product/bug tickets.
+
+**Sources to combine:**
+- HubSpot — pull deals by `notes_last_updated` (not just `hs_lastmodifieddate`), then read the actual notes to understand what happened. Also check for deals with close dates approaching or in final stages.
+- Linear — pull BoreDM Ops issues assigned to Growth and Sales team members (not Sam — he's ops, not sales) that were updated/completed today
+
+**Format:** Four sections, no emojis:
+
+*Accomplished Today*
+What actually got done — closed deals, demos held, follow-ups sent, Linear tickets completed. Who did it.
+- List each deal as a sub-bullet with a one-line summary of the latest action. Append links at the end in parentheses: `(<url|HubSpot Deal>)` or `(<url|Linear Issue>)`.
+
+*Missed / Slipped*
+Meetings that didn't happen, follow-ups that were due but not logged, deals that went quiet that should have been touched, close dates that passed.
+
+*First Things Tomorrow*
+The 3-5 most important things to knock out first thing — concrete, assigned, actionable.
+
+*Add to Linear*
+Things that surfaced today that should be ticketed — follow-ups, action items, setup tasks, anything falling through the cracks.
+
+**Attribution:** Check `hubspot_owner_id` on the note itself and the deal owner on the HubSpot record. Also check the Linear assignee. Don't assume.
+
+**Links:** Always use labeled Slack hyperlinks (`<url|label>`) appended in parentheses at the end of the relevant bullet. Never paste raw URLs or surface bare ticket codes (e.g. BOROPS-123) on their own.
+
+**Don't:** Just list current deal stages — that's a pipeline snapshot, not a summary of activity. No emojis in summaries. Don't include Sam's Linear tickets. Don't store deal-specific context in memory files — use HubSpot as the source of truth for deal and competitor details.
+
+### Linear Tickets
+
+Always use the *BOROPS* team when creating new Linear tickets unless explicitly instructed otherwise.
+
+When creating tickets for someone, never place them in Triage. Use Todo, Ready, or whichever state fits the context. Also position them correctly by priority — look at the existing tickets in that state and insert the new one where it belongs relative to the others, not just at the top or bottom.
+
+When creating tickets on behalf of someone, always include a line at the bottom of the description: _"Requested by [Name] via Corey"_ — since the Linear API always attributes creation to the API key owner and the actual requester won't be visible otherwise.
+
+### General Operating Principles
+
+*Script over subagent for data transformation*
+When raw data (JSON, API responses, etc.) needs to be transformed into another format, always write a script (Python/bash) to do it — never use a subagent or write it out manually. Subagents are for tasks requiring judgment; scripts are for deterministic transformation.
+
+*Verify before delivering*
+Before sending any file or output, spot-check it in the terminal. Running without errors is not the same as being correct. Check field names, sample values, and counts against expectations before delivering.
+
+*Audience check*
+Before building or modifying any user-facing artifact, ask: who will read this, and is anything in it assuming a specific viewer? Remove personalization (first-person labels, "you" references, viewer-specific sorting) from shared artifacts.
+
+*Output usefulness test*
+Before adding any element to a deliverable — a section, a metric, a chart, a field — ask: what decision or action does this enable? If it just displays information without helping someone do something differently, it's probably not worth including. Favor outputs that are dense with actionable signal over ones that are visually interesting but low-utility.
+
+*Cache automations with full API calls*
+When the team asks me to remember a workflow or automation, store the complete API calls (curl commands, scripts, exact endpoints) in memory — not just a description of the flow. This avoids re-researching and rewriting calls on every invocation, saving tokens and time.
+
+*Self-contained tickets*
+When creating Linear tickets, include everything the assignee needs to complete the task directly in the ticket description — email drafts, recipient lists, links, context. Don't make them go hunt through Slack threads for critical info.
+
+*Spelling*
+Our support bot is *Auggie* (short for Auger), not "Augie."
+
+### Attaching Images to Linear Tickets
+
+The `mcp__linear__create_attachment` MCP tool does not work for files larger than ~256KB — it requires the raw base64 string inline, which exceeds what the Read tool can pass.
+
+**Use this flow instead:**
+
+1. Compress the image using `sharp` (install to `/tmp/npm` with `npm install sharp --prefix /tmp/npm` if not present):
+   ```js
+   const sharp = require('/tmp/npm/node_modules/sharp');
+   await sharp(inputPath).jpeg({ quality: 85 }).toFile(outputPath);
+   ```
+
+2. Upload via Linear's GraphQL API using `LINEAR_API_KEY` from the environment:
+   - Call `fileUpload` mutation → get `uploadUrl`, `assetUrl`, and `headers`
+   - PUT the file to `uploadUrl` with the returned headers (including `x-goog-content-length-range`)
+   - Call `attachmentCreate` with `issueId` and `assetUrl`
+
+```js
+// Full working pattern (Feb 24, 2026):
+const LINEAR_API_KEY = process.env.LINEAR_API_KEY;
+
+async function uploadFileToLinear(filepath, filename, title, issueId) {
+  const fileData = fs.readFileSync(filepath);
+  const contentType = 'image/jpeg';
+
+  const presign = await graphql(`
+    mutation FileUpload($contentType: String!, $filename: String!, $size: Int!) {
+      fileUpload(contentType: $contentType, filename: $filename, size: $size) {
+        uploadFile { uploadUrl assetUrl headers { key value } }
+      }
+    }`, { contentType, filename, size: fileData.length });
+
+  const { uploadUrl, assetUrl, headers } = presign.data.fileUpload.uploadFile;
+  const uploadHeaders = { 'Content-Type': contentType };
+  headers.forEach(h => { uploadHeaders[h.key] = h.value; });
+
+  await httpPut(uploadUrl, fileData, uploadHeaders); // must include x-goog-content-length-range
+
+  await graphql(`mutation {
+    attachmentCreate(input: { issueId: "${issueId}", url: "${assetUrl}", title: "${title}" }) {
+      success attachment { id }
+    }
+  }`, {});
+}
+```
+
+### Reports
+
+I maintain a library of reports that can be regenerated on demand. Two exist today:
+
+**1. Pipeline Report (HTML)**
+File: `/workspace/group/sales_report.html`
+Regenerate: Pull fresh open deals from HubSpot → inject into `const DEALS = [...]` block → update date header → send via `mcp__nanoclaw__send_file`.
+Contents: pipeline by stage, weekly close timeline, stage health, rep capacity. No hygiene/quality sections.
+
+*Pagination:* HubSpot search returns max 100 results per page. Always paginate using the `after` cursor until no more pages remain, then merge all pages before injecting into the report.
+
+**2. Deal Quality Report (Slack)**
+Regenerate: Pull fresh open deals → score each 0–6 on hygiene checks (amount set, active owner, future close date, updated <60 days, has notes, high-prob deals close ≤90 days) → post as native Slack Block Kit message with thread replies.
+Format: Short main message (scorecard + rep table) + 3 thread replies (🔴 dirty, 🟠 attention, ✅ clean). Each deal is a clickable HubSpot link.
+
+**Shared constants:**
+- Slack channel ID: `C0AFQJ8TEJJ`
+- HubSpot portal: `46443655`
+- HubSpot deal URL: `https://app.hubspot.com/contacts/46443655/deal/{id}`
+- Deal data: always pull fresh from HubSpot search API (never cache)
+- Owner map: see `/workspace/group/team.md`
+
+### Calendar
+
+You have Google Calendar access via the `google-calendar` MCP server. Use it to create, read, update, and delete calendar events directly.
+
+- When creating events, always include attendee emails if provided
+- Default duration is 1 hour unless specified
+- Confirm event details with the user after creating
+- Title format for sales meetings: `BoreDM / [Company] - [Meeting Type]` (e.g. "BoreDM / Acme - Intro", "BoreDM / Acme - Trial Check-In")
+- Description should include useful context: contact name and email for questions/reschedules, relevant deal context (e.g. what they're evaluating), agenda if known, and any other info that would help the invitee
+- When listing or referencing calendars, only mention BoreDM-owned calendars (e.g. `will@boredmlogs.com`, `kristan@boredmlogs.com`, `faith@boredmlogs.com`, `BoreDM Team`). Never surface or mention non-BoreDM calendars (personal Gmail accounts, university accounts, etc.) in messages to the team.
+- When proposing meeting times with clients/prospects, present options between 8:30 AM – 5:30 PM in the client's timezone.
+
+### Invoice Lookups
+
+When asked about an existing Stripe invoice:
+
+1. Find the invoice ID via MCP: `search_stripe_resources` with `invoices:number:"XXXXXX"`
+2. Get the `invoice_pdf` URL directly from the Stripe API:
+```bash
+curl -s "https://api.stripe.com/v1/invoices/{INVOICE_ID}" \
+  -u "$(grep STRIPE_SECRET_KEY /workspace/project/.env | cut -d= -f2-):" \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('invoice_pdf',''))"
+```
+3. Download the PDF:
+```bash
+curl -sL "{INVOICE_PDF_URL}" -o /workspace/group/invoice_{NUMBER}.pdf
+```
+4. Send via `mcp__nanoclaw__send_file` with a comment that includes:
+   - Payment status (paid, open, void, draft, etc.)
+   - Slack hyperlink to the Stripe invoice dashboard
+   - Slack hyperlink to the Stripe customer
+
+Skip the `fetch_stripe_resources` MCP call — it doesn't return the `invoice_pdf` field. Two curl calls + one file send = done.
+
 ### Sales Meeting Action Items
 
 After every sales meeting, action items should always include:
@@ -256,3 +461,11 @@ After every sales meeting, action items should always include:
 - Any *engineering/setup tasks* (e.g. trial accounts) — offer to create a Linear ticket assigned to the right person on the team.
 - Only include action items that are *concrete and assignable* — remove anything vague or passive.
 - Check HubSpot for an existing company and deal. Report what you find (or don't find), propose any changes (create company/deal, update deal stage, add meeting note), and wait for confirmation before making any updates.
+
+### Meeting Transcript Processing
+
+When Louis shares a meeting transcript:
+1. Look up the company/contacts in HubSpot first (search by contact names and email domains from the transcript, not company name guesses)
+2. Keep the summary to 2-4 sentences max — just enough context to frame the action items
+3. Jump straight into proposed actions: what I plan to do, what needs confirmation, and any deliverables (calendar invites, email drafts, etc.)
+4. Calendar invites go at the top — they're usually the most time-sensitive

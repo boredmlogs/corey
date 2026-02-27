@@ -191,7 +191,7 @@ function createPreCompactHook(): HookCallback {
 // Secrets to strip from Bash tool subprocess environments.
 // These are needed by claude-code for API auth but should never
 // be visible to commands Kit runs.
-const SECRET_ENV_VARS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'HUBSPOT_ACCESS_TOKEN', 'STRIPE_SECRET_KEY', 'DD_API_KEY', 'DD_APP_KEY', 'LINEAR_API_KEY'];
+const SECRET_ENV_VARS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'HUBSPOT_ACCESS_TOKEN', 'STRIPE_SECRET_KEY', 'DD_API_KEY', 'DD_APP_KEY', 'LINEAR_API_KEY', 'TLDV_API_KEY'];
 
 function createSanitizeBashHook(): HookCallback {
   return async (input, _toolUseId, _context) => {
@@ -420,7 +420,7 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
-      model: 'claude-sonnet-4-6',
+      model: 'claude-opus-4-6',
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
@@ -440,7 +440,9 @@ async function runQuery(
         'mcp__hubspot__*',
         'mcp__stripe__*',
         'mcp__datadog__*',
-        'mcp__linear__*'
+        'mcp__linear__*',
+        'mcp__tldv__*',
+        'mcp__google-calendar__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -479,6 +481,23 @@ async function runQuery(
             Authorization: `Bearer ${sdkEnv.LINEAR_API_KEY || ''}`,
           },
         },
+        tldv: {
+          command: 'npx',
+          args: ['-y', 'tldv-mcp'],
+          env: {
+            TLDV_API_KEY: sdkEnv.TLDV_API_KEY || '',
+          },
+        },
+        ...(fs.existsSync('/home/node/.google-calendar-mcp/gcp-oauth.keys.json') ? {
+          'google-calendar': {
+            command: 'npx',
+            args: ['-y', '@cocal/google-calendar-mcp'],
+            env: {
+              GOOGLE_OAUTH_CREDENTIALS: '/home/node/.google-calendar-mcp/gcp-oauth.keys.json',
+              GOOGLE_CALENDAR_MCP_TOKEN_PATH: '/home/node/.google-calendar-mcp/tokens.json',
+            },
+          },
+        } : {}),
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook()] }],

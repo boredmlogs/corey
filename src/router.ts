@@ -18,7 +18,8 @@ export function formatMessages(messages: NewMessage[]): string {
         inner += `\n<file name="${escapeXml(f.name)}" type="${escapeXml(f.mimetype)}" path="${escapeXml(containerPath)}" />`;
       }
     }
-    return `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}" id="${escapeXml(m.id)}">${inner}</message>`;
+    const tzAttr = m.sender_tz ? ` tz="${escapeXml(m.sender_tz)}"` : '';
+    return `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}"${tzAttr} id="${escapeXml(m.id)}">${inner}</message>`;
   });
   return `<messages>\n${lines.join('\n')}\n</messages>`;
 }

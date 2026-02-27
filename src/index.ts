@@ -26,6 +26,7 @@ import {
   getMessageById,
   getMessagesSince,
   getLatestMessageTs,
+  getLatestTimestamp,
   getNewMessages,
   getRecentTaskRuns,
   getRouterState,
@@ -35,6 +36,7 @@ import {
   setSession,
   storeChatMetadata,
   storeMessage,
+  storeMessageDirect,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { startIpcWatcher } from './ipc.js';
@@ -198,8 +200,22 @@ async function processThread(
       const text = stripInternalTags(raw);
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
       if (text) {
-        await slack.sendMessage(chatJid, text, threadTs);
+        const sentTs = await slack.sendMessage(chatJid, text, threadTs);
         outputSentToUser = true;
+        // Store bot message so reactions can look it up
+        if (sentTs) {
+          storeMessageDirect({
+            id: String(sentTs),
+            chat_jid: chatJid,
+            sender: ASSISTANT_NAME,
+            sender_name: ASSISTANT_NAME,
+            content: text,
+            timestamp: new Date().toISOString(),
+            is_from_me: true,
+            is_bot_message: true,
+            thread_ts: threadTs,
+          });
+        }
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
@@ -606,9 +622,14 @@ async function main(): Promise<void> {
       tasks: getAllTasks().filter((t) => t.status === 'active'),
       recentRuns: getRecentTaskRuns(5),
     }),
-    lookupMessageThreadTs: (chatJid, messageId) => {
+    lookupMessage: (chatJid, messageId) => {
       const msg = getMessageById(messageId, chatJid);
-      return msg?.thread_ts || null;
+      if (!msg) return null;
+      return {
+        content: msg.content,
+        thread_ts: msg.thread_ts,
+        is_bot_message: msg.is_bot_message === 1,
+      };
     },
   });
 
@@ -625,6 +646,15 @@ async function main(): Promise<void> {
       const caught = await slack.catchUpMessages(channelsToSync);
       if (caught > 0) {
         logger.info({ count: caught }, 'Caught up on missed messages');
+        // Advance lastTimestamp past all caught-up messages so the message loop
+        // and recovery don't treat them as "new" and re-process old threads.
+        const jids = Object.keys(registeredGroups);
+        const latest = getLatestTimestamp(jids);
+        if (latest && latest > lastTimestamp) {
+          lastTimestamp = latest;
+          saveState();
+          logger.debug({ lastTimestamp }, 'Advanced cursor past caught-up messages');
+        }
       }
     } catch (err) {
       logger.warn({ err }, 'Message catch-up failed (will rely on live events)');

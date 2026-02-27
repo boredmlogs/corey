@@ -123,6 +123,15 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* column already exists */
   }
+
+  // Add sender_tz column if it doesn't exist (migration for user timezone)
+  try {
+    database.exec(
+      `ALTER TABLE messages ADD COLUMN sender_tz TEXT DEFAULT NULL`,
+    );
+  } catch {
+    /* column already exists */
+  }
 }
 
 export function initDatabase(): void {
@@ -235,12 +244,13 @@ export function setLastGroupSync(): void {
  */
 export function storeMessage(msg: NewMessage): void {
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, thread_ts, files_json, is_reaction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, sender_tz, content, timestamp, is_from_me, is_bot_message, thread_ts, files_json, is_reaction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
     msg.sender,
     msg.sender_name,
+    msg.sender_tz || null,
     msg.content,
     msg.timestamp,
     msg.is_from_me ? 1 : 0,
@@ -291,7 +301,7 @@ export function getNewMessages(
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
   const sql = `
-    SELECT id, chat_jid, sender, sender_name, content, timestamp, thread_ts, files_json, is_reaction
+    SELECT id, chat_jid, sender, sender_name, sender_tz, content, timestamp, thread_ts, files_json, is_reaction
     FROM messages
     WHERE timestamp > ? AND chat_jid IN (${placeholders})
       AND is_bot_message = 0 AND content NOT LIKE ?
@@ -326,7 +336,7 @@ export function getMessagesSince(
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
   const sql = `
-    SELECT id, chat_jid, sender, sender_name, content, timestamp, thread_ts, files_json, is_reaction
+    SELECT id, chat_jid, sender, sender_name, sender_tz, content, timestamp, thread_ts, files_json, is_reaction
     FROM messages
     WHERE chat_jid = ? AND timestamp > ?
       AND is_bot_message = 0 AND content NOT LIKE ?
@@ -349,10 +359,10 @@ export function getMessagesSince(
 export function getMessageById(
   messageId: string,
   chatJid: string,
-): { thread_ts: string | null } | undefined {
+): { content: string; thread_ts: string | null; is_bot_message: number } | undefined {
   return db
-    .prepare('SELECT thread_ts FROM messages WHERE id = ? AND chat_jid = ?')
-    .get(messageId, chatJid) as { thread_ts: string | null } | undefined;
+    .prepare('SELECT content, thread_ts, is_bot_message FROM messages WHERE id = ? AND chat_jid = ?')
+    .get(messageId, chatJid) as { content: string; thread_ts: string | null; is_bot_message: number } | undefined;
 }
 
 /**
@@ -364,6 +374,19 @@ export function getLatestMessageTs(chatJid: string): string | null {
     .prepare('SELECT MAX(id) as latest_ts FROM messages WHERE chat_jid = ?')
     .get(chatJid) as { latest_ts: string | null } | undefined;
   return row?.latest_ts || null;
+}
+
+/**
+ * Get the latest ISO timestamp across all messages in the given channels.
+ * Used after catch-up to advance the message loop cursor past stored messages.
+ */
+export function getLatestTimestamp(jids: string[]): string | null {
+  if (jids.length === 0) return null;
+  const placeholders = jids.map(() => '?').join(',');
+  const row = db
+    .prepare(`SELECT MAX(timestamp) as latest FROM messages WHERE chat_jid IN (${placeholders})`)
+    .get(...jids) as { latest: string | null } | undefined;
+  return row?.latest || null;
 }
 
 export function deleteMessage(messageId: string, chatJid: string): void {

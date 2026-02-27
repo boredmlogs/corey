@@ -53,6 +53,7 @@ export interface NewMessage {
   chat_jid: string;
   sender: string;
   sender_name: string;
+  sender_tz?: string;
   content: string;
   timestamp: string;
   is_from_me?: boolean;

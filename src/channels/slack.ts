@@ -31,7 +31,7 @@ export interface StatusData {
   recentRuns: Array<TaskRunLog & { task_prompt: string | null }>;
 }
 
-export type LookupMessageThreadTs = (chatJid: string, messageId: string) => string | null;
+export type LookupMessage = (chatJid: string, messageId: string) => { content: string; thread_ts: string | null; is_bot_message: boolean } | null;
 
 export interface SlackChannelOpts {
   onMessage: OnInboundMessage;
@@ -39,7 +39,7 @@ export interface SlackChannelOpts {
   onMessageDelete?: OnMessageDelete;
   registeredGroups: () => Record<string, RegisteredGroup>;
   getStatusData?: () => StatusData;
-  lookupMessageThreadTs?: LookupMessageThreadTs;
+  lookupMessage?: LookupMessage;
 }
 
 export class SlackChannel implements Channel {
@@ -52,7 +52,7 @@ export class SlackChannel implements Channel {
   private outgoingQueue: Array<{ jid: string; text: string; threadTs?: string }> = [];
   private flushing = false;
   private channelSyncTimerStarted = false;
-  private displayNameCache: Map<string, string> = new Map();
+  private userInfoCache: Map<string, { name: string; tz: string }> = new Map();
 
   private opts: SlackChannelOpts;
 
@@ -129,45 +129,63 @@ export class SlackChannel implements Channel {
       const groups = this.opts.registeredGroups();
       if (!groups[channel]) return;
 
-      // Only process reactions on the bot's own messages
-      try {
-        const history = await this.app.client.conversations.history({
-          channel,
-          latest: messageTs,
-          inclusive: true,
-          limit: 1,
-        });
-        const msg = history.messages?.[0];
-        if (!msg || msg.user !== this.botUserId) return;
-      } catch (err) {
-        logger.debug({ channel, messageTs, err }, 'Failed to look up reacted-to message');
-        return;
-      }
-
-      const senderName = await this.resolveDisplayName(event.user);
-      const timestamp = new Date(parseFloat(event.event_ts) * 1000).toISOString();
-
-      // Look up the reacted-to message's thread_ts so the reaction
-      // appears in the correct thread context
+      // Look up the reacted-to message from our DB first (works for both
+      // channel messages and thread replies, unlike conversations.history
+      // which only returns channel-level messages).
+      let reactedContent: string | undefined;
       let threadTs: string | undefined;
-      if (this.opts.lookupMessageThreadTs) {
-        const dbThreadTs = this.opts.lookupMessageThreadTs(channel, messageTs);
-        threadTs = dbThreadTs || undefined;
+
+      if (this.opts.lookupMessage) {
+        const dbMsg = this.opts.lookupMessage(channel, messageTs);
+        if (dbMsg) {
+          if (!dbMsg.is_bot_message) return; // Only process reactions on bot messages
+          reactedContent = dbMsg.content;
+          threadTs = dbMsg.thread_ts || undefined;
+        }
       }
+
+      // Fall back to Slack API if not in DB (e.g. older messages sent before storing)
+      if (!reactedContent) {
+        try {
+          const history = await this.app.client.conversations.history({
+            channel,
+            latest: messageTs,
+            inclusive: true,
+            limit: 1,
+          });
+          const msg = history.messages?.[0];
+          if (!msg || msg.user !== this.botUserId) return;
+          reactedContent = msg.text || '';
+          threadTs = (msg as any).thread_ts || undefined;
+        } catch (err) {
+          logger.debug({ channel, messageTs, err }, 'Failed to look up reacted-to message');
+          return;
+        }
+      }
+
       // If the reacted-to message IS a thread parent, use it as the thread
-      if (!threadTs && messageTs !== event.event_ts) {
-        // Check if messageTs is itself a thread parent by checking if it has replies
-        // Simple heuristic: if we didn't find it in DB with a thread_ts, it's likely
-        // a top-level message. Use messageTs as the thread so the reaction is contextualized.
+      if (!threadTs) {
         threadTs = messageTs;
       }
+
+      const userInfo = await this.resolveUserInfo(event.user);
+      const timestamp = new Date(parseFloat(event.event_ts) * 1000).toISOString();
+
+      // Include a snippet of the reacted-to message so the agent knows what was reacted to
+      const snippet = reactedContent && reactedContent.length > 200
+        ? reactedContent.slice(0, 200) + '...'
+        : reactedContent;
+      const content = snippet
+        ? `[reacted with :${event.reaction}: to: "${snippet}"]`
+        : `[reacted with :${event.reaction}:]`;
 
       this.opts.onMessage(channel, {
         id: `reaction-${event.event_ts}`,
         chat_jid: channel,
         sender: event.user,
-        sender_name: senderName,
-        content: `[reacted with :${event.reaction}: to message ${messageTs}]`,
+        sender_name: userInfo.name,
+        sender_tz: userInfo.tz || undefined,
+        content,
         timestamp,
         is_from_me: false,
         is_bot_message: false,
@@ -247,8 +265,8 @@ export class SlackChannel implements Channel {
 
     const timestamp = new Date(parseFloat(ts) * 1000).toISOString();
 
-    // Resolve display name
-    const senderName = await this.resolveDisplayName(userId);
+    // Resolve display name and timezone
+    const userInfo = await this.resolveUserInfo(userId);
 
     // Notify about chat metadata for channel discovery
     this.opts.onChatMetadata(channel, timestamp);
@@ -271,7 +289,8 @@ export class SlackChannel implements Channel {
         id: ts,
         chat_jid: channel,
         sender: userId,
-        sender_name: senderName,
+        sender_name: userInfo.name,
+        sender_tz: userInfo.tz || undefined,
         content: text || (files?.length ? '[file attachment]' : ''),
         timestamp,
         is_from_me: false,
@@ -358,7 +377,7 @@ export class SlackChannel implements Channel {
     }
 
     const timestamp = new Date(parseFloat(ts) * 1000).toISOString();
-    const senderName = await this.resolveDisplayName(userId);
+    const userInfo = await this.resolveUserInfo(userId);
 
     // Download files from edited message if present
     let files: MessageFile[] | undefined;
@@ -373,7 +392,8 @@ export class SlackChannel implements Channel {
       id: ts,
       chat_jid: channel,
       sender: userId,
-      sender_name: senderName,
+      sender_name: userInfo.name,
+      sender_tz: userInfo.tz || undefined,
       content: text || (files?.length ? '[file attachment]' : ''),
       timestamp,
       is_from_me: false,
@@ -439,8 +459,8 @@ export class SlackChannel implements Channel {
     setInterval(cleanup, FILE_CLEANUP_INTERVAL_MS);
   }
 
-  private async resolveDisplayName(userId: string): Promise<string> {
-    const cached = this.displayNameCache.get(userId);
+  private async resolveUserInfo(userId: string): Promise<{ name: string; tz: string }> {
+    const cached = this.userInfoCache.get(userId);
     if (cached) return cached;
 
     try {
@@ -450,12 +470,18 @@ export class SlackChannel implements Channel {
         result.user?.real_name ||
         result.user?.name ||
         userId;
-      this.displayNameCache.set(userId, name);
-      return name;
+      const tz = result.user?.tz || '';
+      const info = { name, tz };
+      this.userInfoCache.set(userId, info);
+      return info;
     } catch (err) {
-      logger.debug({ userId, err }, 'Failed to resolve display name');
-      return userId;
+      logger.debug({ userId, err }, 'Failed to resolve user info');
+      return { name: userId, tz: '' };
     }
+  }
+
+  private async resolveDisplayName(userId: string): Promise<string> {
+    return (await this.resolveUserInfo(userId)).name;
   }
 
   /**
@@ -467,8 +493,8 @@ export class SlackChannel implements Channel {
 
     // Build reverse map: lowercase display name → user ID
     const nameToId = new Map<string, string>();
-    for (const [userId, name] of this.displayNameCache) {
-      nameToId.set(name.toLowerCase(), userId);
+    for (const [userId, info] of this.userInfoCache) {
+      nameToId.set(info.name.toLowerCase(), userId);
     }
     if (nameToId.size === 0) return text;
 
@@ -562,7 +588,7 @@ export class SlackChannel implements Channel {
           if (msg.bot_id || (msg.subtype && msg.subtype !== 'file_share')) continue;
           if (!msg.ts || !msg.user) continue;
 
-          const senderName = await this.resolveDisplayName(msg.user);
+          const userInfo = await this.resolveUserInfo(msg.user);
           let text = msg.text || '';
           // Strip bot mention
           if (this.botUserId) {
@@ -586,7 +612,8 @@ export class SlackChannel implements Channel {
             id: msg.ts,
             chat_jid: jid,
             sender: msg.user,
-            sender_name: senderName,
+            sender_name: userInfo.name,
+            sender_tz: userInfo.tz || undefined,
             content: text || '[message]',
             timestamp,
             is_from_me: false,
@@ -613,7 +640,7 @@ export class SlackChannel implements Channel {
                   if (reply.bot_id || ((reply as any).subtype && (reply as any).subtype !== 'file_share')) continue;
                   if (!reply.ts || !reply.user) continue;
 
-                  const replySenderName = await this.resolveDisplayName(reply.user);
+                  const replyUserInfo = await this.resolveUserInfo(reply.user);
                   let replyText = reply.text || '';
                   if (this.botUserId) {
                     replyText = replyText.replace(new RegExp(`<@${this.botUserId}>\\s*`, 'g'), '').trim();
@@ -624,7 +651,8 @@ export class SlackChannel implements Channel {
                     id: reply.ts,
                     chat_jid: jid,
                     sender: reply.user,
-                    sender_name: replySenderName,
+                    sender_name: replyUserInfo.name,
+                    sender_tz: replyUserInfo.tz || undefined,
                     content: replyText || '[message]',
                     timestamp: replyTimestamp,
                     is_from_me: false,
