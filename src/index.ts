@@ -156,8 +156,8 @@ async function processThread(
   const pending = threadMessages.filter((m) => m.timestamp > threadCursor);
   if (pending.length === 0) return true;
 
-  // Check trigger per-thread (reactions bypass trigger check)
-  if (!isMainGroup && group.requiresTrigger !== false) {
+  // Check trigger per-thread (reactions bypass trigger check, threads always respond)
+  if (!isMainGroup && !threadTs && group.requiresTrigger !== false) {
     const hasTrigger = pending.some((m) =>
       m.is_reaction || TRIGGER_PATTERN.test(m.content.trim()),
     );
@@ -484,7 +484,7 @@ async function startMessageLoop(): Promise<void> {
             // Non-trigger messages accumulate in DB and get pulled as
             // context when a trigger eventually arrives.
             // Reactions bypass the trigger check.
-            if (needsTrigger) {
+            if (needsTrigger && !threadTs) {
               const hasTrigger = threadMsgs.some((m) =>
                 m.is_reaction || TRIGGER_PATTERN.test(m.content.trim()),
               );
